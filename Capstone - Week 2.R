@@ -6,7 +6,10 @@ library(tm)
 library(urltools)
 library(wordcloud)
 library(ggplot2)
+library(grid)
 library(reshape2)
+library(igraph)
+library(ggraph)
 
 ## This function reads in the selected text based on the file name
 ## It also prints some elementry file meta data
@@ -130,8 +133,8 @@ preprocess_corpus <- function(MyCorpus, remove.words)
   ## Convert characters to lower case
   MyCorpus <- tm_map(MyCorpus, content_transformer(tolower))
 
-  ## Perform stemming
-  MMyCorpus <- tm_map(MyCorpus, stemDocument)
+  ## Do Not Perform stemming
+  ##MyCorpus <- tm_map(MyCorpus, stemDocument)
     
   ## If word list has been supplied then remove those words
   if (!is.null(remove.words))
@@ -193,33 +196,30 @@ rm(full.blog, full.news, full.twitter)
 
 ## Load the blog text into a Corpus
 MyCorpus.blog <- VCorpus(VectorSource(sample.blog))
-meta(MyCorpus.blog, "description", type = "indexed") <- "Blog Text - English Language"
-meta(MyCorpus.blog, "document_id", type = "indexed") <- "Blog Text"
 MyCorpus.blog <- preprocess_corpus(MyCorpus.blog, profanity.data)
 
 ## tokenize and make tidy
-dtm.blog <- DocumentTermMatrix(MyCorpus.blog)
-tidy_blog <- tidy(dtm.blog) %>% mutate(document = "Blog")
+tidy_blog <- tidy(DocumentTermMatrix(MyCorpus.blog)) %>% 
+  mutate(document = "Blog") %>%
+  count(document, term, wt = count)
 
 ## Load the news text into a Corpus
 MyCorpus.news <- VCorpus(VectorSource(sample.news))
-meta(MyCorpus.news, "description", type = "indexed") <- "News Text - English Language"
-meta(MyCorpus.news, "document_id", type = "indexed") <- "News Text"
 MyCorpus.news <- preprocess_corpus(MyCorpus.news, profanity.data)
 
 ## tokenize and make tidy
-dtm.news <- DocumentTermMatrix(MyCorpus.news)
-tidy_news <- tidy(dtm.news) %>% mutate(document = "News")
+tidy_news <- tidy(DocumentTermMatrix(MyCorpus.news)) %>% 
+  mutate(document = "News") %>%
+  count(document, term, wt = count)
 
 ## Load the twitter text into a Corpus
 MyCorpus.twitter <- VCorpus(VectorSource(sample.twitter))
-meta(MyCorpus.news, "description", type = "indexed") <- "Twitter Text - English Language"
-meta(MyCorpus.news, "document_id", type = "indexed") <- "Twitter Text"
 MyCorpus.twitter <- preprocess_corpus(MyCorpus.twitter, profanity.data)
 
 ## tokenize and make tidy
-dtm.twitter <- DocumentTermMatrix(MyCorpus.twitter)
-tidy_twitter <- tidy(dtm.twitter) %>% mutate(document = "Twitter")
+tidy_twitter <- tidy(DocumentTermMatrix(MyCorpus.twitter)) %>% 
+  mutate(document = "Twitter") %>%
+  count(document, term, wt = count)
 
 ## Let's plot the most common words - excluding stop words
 
@@ -228,39 +228,95 @@ data("stop_words")
 stop_words <- stop_words %>%
   transmute(term = word, lexicon)
 
-## Show distribution of the top words - not including stop words
+bind_rows(tidy_blog, tidy_news, tidy_twitter) %>%
+  ggplot(aes(document)) + 
+  geom_bar()
+
+bind_rows(tidy_blog, tidy_news, tidy_twitter) %>%
+  count(document, wt = n) %>%
+  transmute(document, type = "included", Num = nn)
+  
+included <- bind_rows(tidy_blog, tidy_news, tidy_twitter) %>%
+  anti_join(stop_words, by='term') %>%
+  mutate(type = "Reg Words")
+
+excluded <- bind_rows(tidy_blog, tidy_news, tidy_twitter) %>%
+  semi_join(stop_words, by='term') %>%
+  mutate(type = "Stop Words")
+
+## plot total words categorized by stop words and regular words
+
+options(scipen=10000)
+bind_rows(included, excluded) %>%
+  ggplot(aes(x = document, y = n)) + 
+  geom_bar(aes(fill = type), stat = 'identity') + 
+  labs(title="Total unigrams categorized by stopwords inclusion/exclusion") + 
+  labs(x="Media Type", y="Count")
+
+par(mfrow=c(1,2), new = TRUE)
+par(oma=c(0,0,1,0))
+
+## plot top 25 words - excluding stop words
 bind_rows(tidy_blog, tidy_news, tidy_twitter) %>%
   anti_join(stop_words, by='term') %>%
-  count(term, sort = TRUE) %>%
-  top_n(25, n) %>%
-  mutate(term = reorder(term, n)) %>%
-  ggplot(aes(x = term, y = n, fill = n)) +
+  count(term, wt=n, sort=TRUE) %>%
+  top_n(25, nn) %>%
+  mutate(term = reorder(term, nn)) %>%
+  ggplot(aes(x = term, y = nn, fill = nn)) +
   geom_bar(stat = "identity", colour = "Black") +
-  labs(title = "Top 25 words overall (not including stop words)", 
+  labs(title = "Top 25 words overall (excluding stop words)", 
+       x = "Word", y = "Num occurences") +
+  coord_flip()
+
+## plot top 25 words - including stop words
+bind_rows(tidy_blog, tidy_news, tidy_twitter) %>%
+##  anti_join(stop_words, by='term') %>%
+  count(term, wt=n, sort=TRUE) %>%
+  top_n(25, nn) %>%
+  mutate(term = reorder(term, nn)) %>%
+  ggplot(aes(x = term, y = nn, fill = nn)) +
+  geom_bar(stat = "identity", colour = "Black") +
+  labs(title = "Top 25 words overall (including stop words)", 
        x = "Word", y = "Num occurences") +
   coord_flip()
 
 ## generate a word cloud of the top 25 frequently used words
 bind_rows(tidy_blog, tidy_news, tidy_twitter) %>%
   anti_join(stop_words, by='term') %>%
-  count(term, sort = TRUE) %>%
-  top_n(25, n) %>%
-  mutate(term = reorder(term, n)) %>%
-  with(wordcloud(term, n, scale=c(3,.2), max.words = 25, random.order = FALSE, 
+  count(term, wt=n, sort = TRUE) %>%
+  top_n(25, nn) %>%
+  mutate(term = reorder(term, nn)) %>%
+  with(wordcloud(term, nn, scale=c(3,.2), max.words = 25, random.order = FALSE, 
                  random.color = FALSE, rot.per = .5, colors = rainbow(10)))
 
-## plot the top 5 most frequently used words for each media type
-## not including all stopwords from all lexicons
+par(mfrow=c(1,2))
+par(oma=c(0,0,1,0))
 
+## plot the top 5 most frequently used words for each media type
+## not including stopwords
 bind_rows(tidy_blog, tidy_news, tidy_twitter) %>%
   anti_join(stop_words, by='term') %>%
   group_by(document) %>%
-  count(term, sort = TRUE) %>%
-  top_n(5, n) %>%
-  mutate(term = reorder(term, n)) %>%
-  ggplot(aes(x= term, y = n, fill = document, order = document)) +
+  count(term, wt = n, sort = TRUE) %>%
+  top_n(5, nn) %>%
+  mutate(term = reorder(term, nn)) %>%
+  ggplot(aes(x= term, y = nn, fill = document, order = document)) +
   geom_bar(stat = "identity", colour = "black") +
-  labs(title = "Top 5 words by media type", 
+  labs(title = "Top 5 words by media type - Excluding Stopwords", 
+       x = "Word", y = "Num occurences") +
+  facet_wrap(~document, ncol = 1)
+
+## plot the top 5 most frequently used words for each media type
+## including stopwords
+bind_rows(tidy_blog, tidy_news, tidy_twitter) %>%
+##  anti_join(stop_words, by='term') %>%
+  group_by(document) %>%
+  count(term, wt = n, sort = TRUE) %>%
+  top_n(5, nn) %>%
+  mutate(term = reorder(term, nn)) %>%
+  ggplot(aes(x= term, y = nn, fill = document, order = document)) +
+  geom_bar(stat = "identity", colour = "black") +
+  labs(title = "Top 5 words by media type - Including Stopwords", 
        x = "Word", y = "Num occurences") +
   facet_wrap(~document, ncol = 1)
 
@@ -269,21 +325,22 @@ bind_rows(tidy_blog, tidy_news, tidy_twitter) %>%
 
 text_words <- bind_rows(tidy_blog, tidy_news, tidy_twitter) %>%
   group_by(document) %>%
-  count(term, sort = TRUE) %>%
+  count(term, wt = n, sort = TRUE) %>%
   ungroup()
   
 document_words <- text_words %>%
   group_by(document) %>%
-  summarise(total = sum(n))
+  summarise(total = sum(nn))
 
-text_words <- left_join(text_words, document_words)
+text_words <- left_join(text_words, document_words, by = "document")
 
-ggplot(text_words, aes(n/total, fill = document)) + 
-  geom_histogram(show.legend = FALSE) + 
+ggplot(text_words, aes(nn/total, fill = document)) + 
+  geom_histogram(show.legend = FALSE, binwidth = .00001) + 
   xlim(NA, 0.0009) + 
   labs(title = "Term Frequency - distribution of n/total for each media type", 
        x = "Word", y = "Num occurences") +
-  facet_wrap(~document, ncol = 1, scales = "free_y")
+  facet_wrap(~document, ncol = 1, scales = "free_y") + 
+  scale_y_log10()
 
 ## Zipf's law states that the frequency that a term appears is inversely 
 ## proportional to its rank
@@ -291,7 +348,7 @@ ggplot(text_words, aes(n/total, fill = document)) +
 freq_by_rank <- text_words %>% 
   group_by(document) %>%
   mutate(rank = row_number(),
-         term_frequency = n/total)
+         term_frequency = nn/total)
 
 rank_subset <- freq_by_rank %>%
   filter(rank < 500, 
@@ -313,7 +370,7 @@ freq_by_rank %>%
 ## words that are common but not too common
 
 text_words <- text_words %>%
-  bind_tf_idf(term, document, n)
+  bind_tf_idf(term, document, nn)
 
 text_words %>%
   select(-total) %>%
@@ -332,9 +389,7 @@ text_words %>%
   facet_wrap(~document, ncol = 2, scales = "free") +
   coord_flip()
 
-## analysis ends here so far
-
-mytidytext <- tidy(MyCorpus.twitter)
+## Bigram analyis begins here 
 
 bigram_twitter <- tidy(MyCorpus.twitter) %>% 
   unnest_tokens(bigram, text, token = "ngrams", n = 2) %>%
@@ -348,14 +403,145 @@ bigram_blog <- tidy(MyCorpus.blog) %>%
   unnest_tokens(bigram, text, token = "ngrams", n = 2) %>%
   transmute(document = "Blog", bigram)
 
+## plot top 25 words - excluding stop words
+bind_rows(bigram_blog, bigram_news, bigram_twitter) %>%
+  separate(bigram, c("term1", "term2"), sep = " ") %>%
+  filter(!term1 %in% stop_words$term,
+         !term2 %in% stop_words$term) %>%
+  count(term1, term2, sort = TRUE) %>%
+  unite(bigram, term1, term2, sep = " ") %>%
+  top_n(25, n) %>%
+  mutate(bigram = reorder(bigram, n)) %>%
+  ggplot(aes(x = bigram, y = n, fill = n)) +
+  geom_bar(stat = "identity", colour = "Black") +
+  labs(title = "Top 25 bigrams overall (excluding stop words)", 
+       x = "Word", y = "Num occurences") +
+  coord_flip()
+
+## plot top 25 words - including stop words
+bind_rows(bigram_blog, bigram_news, bigram_twitter) %>%
+  count(bigram, sort = TRUE) %>%
+  top_n(25, n) %>%
+  mutate(bigram = reorder(bigram, n)) %>%
+  ggplot(aes(x = bigram, y = n, fill = n)) +
+  geom_bar(stat = "identity", colour = "Black") +
+  labs(title = "Top 25 bigrams overall (including stop words)", 
+       x = "Word", y = "Num occurences") +
+  coord_flip()
+
+
+## Bigram tf-idf comparison
+
 bind_rows(bigram_blog, bigram_news, bigram_twitter) %>%
   separate(bigram, c("term1", "term2"), sep = " ") %>%
   filter(!term1 %in% stop_words$term,
          !term2 %in% stop_words$term) %>%
   group_by(document) %>%
   count(term1, term2, sort = TRUE) %>%
+  unite(bigram, term1, term2, sep = " ") %>%
   bind_tf_idf(bigram, document, n) %>%
-  arrange(desc(tf_idf))
+  arrange(desc(tf_idf)) %>%
+  mutate(bigram = factor(bigram, levels = rev(unique(bigram)))) %>% 
+  group_by(document) %>% 
+  top_n(15) %>% 
+  ungroup %>%
+  ggplot(aes(bigram, tf_idf, fill = document)) +
+  geom_col(show.legend = FALSE) +
+  labs(title = "Important Bigram Analysis (TF-IDF)",
+       x = "Bigram", y = "tf-idf score") +
+  facet_wrap(~document, ncol = 2, scales = "free") +
+  coord_flip()
+
+## rm(bigram_twitter, bigram_blog, bigram_news)
+
+## Trigram analyis begins here 
+
+trigram_twitter <- tidy(MyCorpus.twitter) %>% 
+  unnest_tokens(bigram, text, token = "ngrams", n = 3) %>%
+  transmute(document = "Twitter", trigram = bigram)
+
+trigram_news <- tidy(MyCorpus.news) %>% 
+  unnest_tokens(bigram, text, token = "ngrams", n = 3) %>%
+  transmute(document = "News", trigram = bigram)
+
+trigram_blog <- tidy(MyCorpus.blog) %>% 
+  unnest_tokens(bigram, text, token = "ngrams", n = 3) %>%
+  transmute(document = "Blog", trigram = bigram)
+
+bind_rows(trigram_blog, trigram_news, trigram_twitter) %>%
+  separate(trigram, c("term1", "term2", "term3"), sep = " ") %>%
+  filter(!term1 %in% stop_words$term,
+         !term2 %in% stop_words$term,
+         !term3 %in% stop_words$term) %>%
+  count(term1, term2, term3, sort = TRUE) %>%
+  unite(trigram, term1, term2, term3, sep = " ") %>%
+  top_n(25, n) %>%
+  mutate(trigram = reorder(trigram, n)) %>%
+  ggplot(aes(x = trigram, y = n, fill = n)) +
+  geom_bar(stat = "identity", colour = "Black") +
+  labs(title = "Top 25 trigrams overall (excluding stop words)", 
+       x = "Word", y = "Num occurences") +
+  coord_flip()
+
+## plot top 25 words - including stop words
+bind_rows(trigram_blog, trigram_news, trigram_twitter) %>%
+  count(trigram, sort = TRUE) %>%
+  top_n(25, n) %>%
+  mutate(trigram = reorder(trigram, n)) %>%
+  ggplot(aes(x = trigram, y = n, fill = n)) +
+  geom_bar(stat = "identity", colour = "Black") +
+  labs(title = "Top 25 trigrams overall (including stop words)", 
+       x = "Word", y = "Num occurences") +
+  coord_flip()
+
+## Trigram tf-idf comparison
+
+bind_rows(trigram_blog, trigram_news, trigram_twitter) %>%
+  separate(trigram, c("term1", "term2", "term3"), sep = " ") %>%
+  filter(!term1 %in% stop_words$term,
+         !term2 %in% stop_words$term,
+         !term3 %in% stop_words$term) %>%
+  group_by(document) %>%
+  count(term1, term2, term3, sort = TRUE) %>%
+  unite(trigram, term1, term2, term3, sep = " ") %>%
+  bind_tf_idf(trigram, document, n) %>%
+  arrange(desc(tf_idf)) %>%
+  mutate(trigram = factor(trigram, levels = rev(unique(trigram)))) %>% 
+  group_by(document) %>% 
+  top_n(15) %>% 
+  ungroup %>%
+  ggplot(aes(trigram, tf_idf, fill = document)) +
+  geom_col(show.legend = FALSE) +
+  labs(title = "Important Trigram Analysis (TF-IDF)",
+       x = "Trigram", y = "tf-idf score") +
+  facet_wrap(~document, ncol = 2, scales = "free") +
+  coord_flip()
+
+rm(trigram_twitter, trigram_blog, trigram_news)
+
+## Graph analysis of bigrams
+
+bigram_graph <- bind_rows(bigram_blog, bigram_news, bigram_twitter) %>%
+  separate(bigram, c("term1", "term2"), sep = " ") %>%
+  filter(!term1 %in% stop_words$term,
+         !term2 %in% stop_words$term) %>%
+  count(term1, term2, sort = TRUE) %>%
+  filter(n > 140) %>%
+  graph_from_data_frame()
+
+set.seed(2016)
+a <- grid::arrow(type = "closed", length = unit(4, "mm"))
+
+ggraph(bigram_graph, layout = "fr") +
+  geom_edge_link(aes(edge_alpha = n), show.legend = FALSE,
+                 arrow = a, end_cap = circle(.07, 'mm')) +
+  geom_node_point(color = "lightblue", size = 2) +
+  geom_node_text(aes(label = name), vjust = 1, hjust = 1) + 
+  theme_graph()
+
+## Examine Pairwise Correlation 
+
+term_cors <- 
 
 ## end of analysis here
 
