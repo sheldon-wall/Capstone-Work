@@ -3,10 +3,8 @@ library(stringr)
 library(tidytext)
 library(tidyr)
 library(tm)
-library(urltools)
-library(ggplot2)
-library(grid)
-library(reshape2)
+library(data.table)
+library(sqldf)
 
 ## This function reads in the selected text based on the file name
 ## It also prints some elementry file meta data
@@ -158,23 +156,58 @@ sample.all <- c(sample.blog, sample.news, sample.twitter)
 MyCorpus <- VCorpus(VectorSource(sample.all))
 MyCorpus <- preprocess_corpus(MyCorpus, profanity.data)
 
-generate_ngram_df <- function(tdm)
+bigram_df <- tidy(MyCorpus) %>% 
+  unnest_tokens(bigram, text, token = "ngrams", n = 2) %>%
+  mutate(type = 2, bigram) %>%
+  count(bigram, sort = TRUE)
+
+bigram_df <- bigram_df %>%
+  mutate(prob = n / nrow(bigram_df)) %>% 
+
+setDT(bigram_df)
+
+trigram_df <- tidy(MyCorpus) %>% 
+  unnest_tokens(trigram, text, token = "ngrams", n = 3) %>%
+  select(trigram) %>%
+  count(trigram, sort = TRUE)
+
+setDT(trigram_df)
+setDT(bigram_df)
+
+trigram_df %>% select(trigram)
+
+trigram_dt <- trigram_df %>%
+  mutate(prob = n / nrow(trigram_df))
+
+quadgram_df <- tidy(MyCorpus) %>% 
+  unnest_tokens(quadgram, text, token = "ngrams", n = 4) %>%
+  select(quadgram) %>%
+  count(quadgram, sort = TRUE)
+
+quadgram_df <- quadgram_df %>%
+  mutate(prob = n / nrow(quadgram_df))
+
+my_text <- "you had me"
+
+sqldf("select * from quadgram_df where guadgram like '%you had me%'")
+
+
+row.names(a10r) <- NULL
+
+
+
+
+calc_prob <- function (ngram, input_string)
 {
-  condense_tdm <- removeSparseTerms(tdm,0.999)
-  in_matrix <- as.matrix(condense_tdm)
-  freq <- as.data.frame(rowSums(in_matrix)) 
-  freq$words <- row.names(freq)
-  colnames(freq)[1] <- "counts"
-  # sorting based on word occurrences
-  freq_ordered <- freq[order(-freq[,1]), ]        
+  
+
+if (candidateIs5gram) {
+  score = matched5gramCount / input4gramCount
+} else if (candidateIs4gram) {
+  score = 0.4 * matched4gramCount / input3gramCount
+} else if (candidateIs3gram) {
+  score = 0.4 * 0.4 * matched3gramCount / input2gramCount
+} else if (candidateIs2gram) {
+  score = 0.4 * 0.4 * 0.4 * matched2gramcount / input1gramCount
 }
-
-# N-gram tokenization
-BigramTokenizer <- function(x) RWeka::NGramTokenizer(x, RWeka::Weka_control(min = 2, max = 2))
-TrigramTokenizer <- function(x) RWeka::NGramTokenizer(x, RWeka::Weka_control(min = 3, max = 3))
-
-unigram <- generate_ngram_df(TermDocumentMatrix(MyCorpus))
-bigram <- generate_ngram_df(TermDocumentMatrix(MyCorpus, control = list(tokenize = BigramTokenizer)))
-trigram <- generate_ngram_df(TermDocumentMatrix(MyCorpus, control = list(tokenize = TrigramTokenizer)))
-
 
