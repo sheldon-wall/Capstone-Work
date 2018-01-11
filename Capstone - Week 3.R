@@ -156,6 +156,10 @@ sample.all <- c(sample.blog, sample.news, sample.twitter)
 MyCorpus <- VCorpus(VectorSource(sample.all))
 MyCorpus <- preprocess_corpus(MyCorpus, profanity.data)
 
+unigram_df <- tidy(MyCorpus) %>%
+  unnest_tokens(unigram, text, token = "ngrams", n = 1) %>%
+  count(unigram, sort = TRUE)
+
 bigram_df <- tidy(MyCorpus) %>% 
   unnest_tokens(bigram, text, token = "ngrams", n = 2) %>%
   mutate(type = 2, bigram) %>%
@@ -163,8 +167,6 @@ bigram_df <- tidy(MyCorpus) %>%
 
 bigram_df <- bigram_df %>%
   mutate(prob = n / nrow(bigram_df)) %>% 
-
-setDT(bigram_df)
 
 trigram_df <- tidy(MyCorpus) %>% 
   unnest_tokens(trigram, text, token = "ngrams", n = 3) %>%
@@ -197,10 +199,23 @@ row.names(a10r) <- NULL
 
 
 
-calc_prob <- function (ngram, input_string)
+split_ngram <- function (ngram, nodes)
 {
-  
 
+  ## loop through for all the rows in the dataframe
+  ## split the frame by n-first words and 
+  new_ngram <- ngram %>%
+    separate(1, c("base", "prediction"), -1) 
+  
+  split_node <- nodes - 1
+  
+  word(ngram[n,1], start = -1)
+  word(ngram[n,1], end = split_node)
+    
+  
+}
+  
+  
 if (candidateIs5gram) {
   score = matched5gramCount / input4gramCount
 } else if (candidateIs4gram) {
