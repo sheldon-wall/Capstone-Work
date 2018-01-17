@@ -13,7 +13,7 @@ read_text <- function(filename)
   con <- file(filename, "rb") 
   text.file <- readLines(con, ok = TRUE, skipNul = TRUE, encoding = "latin1")
   close(con)
-
+  
   iconv(text.file, "latin1", "ASCII", sub="")
   
   nlines <- length(text.file)
@@ -29,7 +29,7 @@ read_text <- function(filename)
       max.length <- linelength
     }
   }
-
+  
   cat("File Name = ", filename, "\n")
   cat("File Size (MB)= ", file.info(filename)$size/1024/1024, "\n")
   cat("Number LInes = ", nlines, "\n")
@@ -67,20 +67,20 @@ preprocess_corpus <- function(MyCorpus, remove.words)
 {
   ## remove URL's
   MyCorpus <- tm_map(MyCorpus, 
-    content_transformer(function(x) gsub("http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+", "", x)))
+                     content_transformer(function(x) gsub("http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+", "", x)))
   
   ## remove emails
   MyCorpus <- tm_map(MyCorpus, 
-    content_transformer(function(x) gsub("\\b[A-Z a-z 0-9._ - ]*[@](.*?)[.]{1,3} \\b", "", x)))
+                     content_transformer(function(x) gsub("\\b[A-Z a-z 0-9._ - ]*[@](.*?)[.]{1,3} \\b", "", x)))
   
   ## remove twitter tags
   MyCorpus <- tm_map(MyCorpus, 
-    content_transformer(function(x) gsub("RT |via", "", x)))
+                     content_transformer(function(x) gsub("RT |via", "", x)))
   
   ## remove twitter usernames
   MyCorpus <- tm_map(MyCorpus,
-    content_transformer(function(x) gsub("[@][a - zA - Z0 - 9_]{1,15}", "", x)))
-
+                     content_transformer(function(x) gsub("[@][a - zA - Z0 - 9_]{1,15}", "", x)))
+  
   ## For the purpose of creating a Corpus which will be used 
   ## there will be no stopword removal 
   ## MyCorpus <- tm_map(MyCorpus, removeWords, stopwords("en"))  
@@ -96,10 +96,10 @@ preprocess_corpus <- function(MyCorpus, remove.words)
   
   ## Convert characters to lower case
   MyCorpus <- tm_map(MyCorpus, content_transformer(tolower))
-
+  
   ## Do Not Perform stemming
   ##MyCorpus <- tm_map(MyCorpus, stemDocument)
-    
+  
   ## If word list has been supplied then remove those words
   if (!is.null(remove.words))
     MyCorpus <- tm_map(MyCorpus, removeWords, remove.words[,1])
@@ -166,7 +166,7 @@ split_ngram <- function (tidy_corpus, nodes, drop = 3)
   ngram_df <- tidy_corpus %>%
     unnest_tokens(ngram, text, token = "ngrams", n = nodes) %>%
     count(ngram, sort = TRUE)
-
+  
   cat( nodes, "-gram rows before =", nrow(ngram_df), "\n")
   ngram_df <- ngram_df %>% 
     mutate(base = "", predictor = "") %>%
@@ -174,11 +174,11 @@ split_ngram <- function (tidy_corpus, nodes, drop = 3)
   cat("After dropping rows with freq <=", drop, " = ", nrow(ngram_df), "\n")
   
   ngram_dt <- as.data.table(ngram_df)
-
-  if (nodes > 1){
+  
+  if (nodes > 0){
     ## split last word out as the predictor
-    ngram_dt$predictor <- word(ngram_dt$ngram, start = -1)
-    ngram_dt$base <- word(ngram_dt$ngram, end = nodes - 1)
+    ngram_dt[, predictor := word(ngram, start = -1)]
+    ngram_dt[, base := word(ngram, end = nodes - 1)]
   }
   else
   {
@@ -195,15 +195,27 @@ split_ngram <- function (tidy_corpus, nodes, drop = 3)
 tidy_corpus <- tidy(MyCorpus)
 rm(MyCorpus)
 
+ngram_1 <- split_ngram(tidy_corpus, 1, 0)
+ngram_1[,n:=n/sum(n)*100]
+ngram_1 <- ngram_1[1:5]
+
+## redistribute the frequency so probability is correct
+ngram_1[1]$n <- 1333
+ngram_1[2]$n <- 768
+ngram_1[3]$n <- 672
+ngram_1[4]$n <- 664
+ngram_1[5]$n <- 560
+
 ngram_2 <- split_ngram(tidy_corpus, 2, 0)
 ngram_3 <- split_ngram(tidy_corpus, 3, 1)
 ngram_4 <- split_ngram(tidy_corpus, 4, 1)
 ngram_5 <- split_ngram(tidy_corpus, 5, 1)
-ngram_all <- rbind(ngram_2, ngram_3, ngram_4, ngram_5) 
+ngram_all <- rbind(ngram_1, ngram_2, ngram_3, ngram_4, ngram_5) 
 setkey(ngram_all, base)
 
 filename <- file.path(dataDir, "ngram_all.Rds")
 saveRDS(ngram_all, filename)
+
 filename <- file.path(dataDir, "tidy_corpus.Rds")
 saveRDS(tidy_corpus, filename)
 
@@ -216,6 +228,7 @@ scrub_and_predict <- function(sentence, num_nodes = 5, num_pred_words = 5)
 {
   ## retrieve last number of words in sentence to start applying ngram search
   sentence <- tolower(sentence)
+  sentence <- gsub("'", "", sentence)
   sentence <- gsub("[[:punct:][:blank:]]+", " ", sentence)
   sentence <- trimws(sentence, "both")
   
@@ -223,6 +236,9 @@ scrub_and_predict <- function(sentence, num_nodes = 5, num_pred_words = 5)
   num_nodes <- min(num_nodes, str_count(sentence, "\\S+"))
   
   ans <- predict_next_word(sentence, ngram_all, num_nodes)
+  
+  setkey(ans, predictor)
+  ans <- subset(ans, !duplicated(predictor))
   
   ## return top num_pred_words 
   setorder(ans, -prob)
@@ -236,20 +252,24 @@ predict_next_word <- function(sentence, ngram_all, node)
 {
   ## set search word 
   search_words <- word(sentence, start = -node, end = -1)
-  
+  ## if we are completely done backing off - then fill with an empty string
+  if (is.na(search_words)){
+    search_words <- ""
+  }
+    
   ans <- ngram_all[base == search_words]
   
   ## if we found matches then 
   if (nrow(ans) > 0){
     ans[,prob:= n/sum(n)]
-    if (node > 1){
+    if (node > 0){
       backoff <- predict_next_word(search_words, ngram_all, node - 1)
       ## stupid backoff
       backoff[,prob:=prob*.4]
       ans <- rbind(ans, backoff)
     }
   } else {
-    if (node > 1){
+    if (node > 0){
       ## stupid backoff
       ans <- predict_next_word(search_words, ngram_all, node - 1)
       ans[,prob:=prob*.4]
@@ -264,79 +284,128 @@ dataDir <- "./data/NLP Datasets"
 filename <- file.path(dataDir, "ngram_all.Rds")
 ngram_all <- readRDS(filename)
 
-sentence <- "adfasdf asdfa3asd 1243adsf3"
-##sentence <- "Hello, how are you"
-next_word <- scrub_and_predict(sentence)
+## sentences from Quiz #2
+
+# Question 1. 
+sentence <- "When you breathe, I want to be the air for you. I'll be there for you, I'd live and I'd"
+next_word <- scrub_and_predict(sentence, num_pred_words = 10000)
+next_word[predictor %in% c("give", "sleep", "eat", "die")]
+## give ** (wrong)
+## sleep
+## eat
+## die ++
+
+nrow(unique(next_word, by=key(next_word$predictor)))
+
+## Question 2
+sentence <- "Guy at my table's wife got up to go to the bathroom and I asked about dessert and he started telling me about his"
+next_word <- scrub_and_predict(sentence, num_pred_words = 10000)
+next_word[predictor %in% c("spiritual", "marital", "horticultural", "financial")]
+## horticultural
+## financial ** (wrong)
+## marital &&
+## spiritual ++ (wrong 2)
+
+## Question 3
+sentence <- "I'd give anything to see arctic monkeys this"
+next_word <- scrub_and_predict(sentence, num_pred_words = 10000)
+next_word[predictor %in% c("morning", "decade", "weekend", "month")]
+## morning ** (wrong)
+## decade
+## weekend ++
+## month
+
+## Question 4
+sentence <- "Talking to your mom has the same effect as a hug and helps reduce your"
+next_word <- scrub_and_predict(sentence, num_pred_words = 10000)
+next_word[predictor %in% c("hunger", "stress", "sleepiness", "happiness")]
+## hunger
+## stress && 
+## sleepiness
+## happiness ** (wrong)
+
+## Question 5
+sentence <- "When you were in Holland you were like 1 inch away from me but you hadn't time to take a"
+next_word <- scrub_and_predict(sentence, num_pred_words = 10000)
+next_word[predictor %in% c("picture", "minute", "walk", "look")]
 next_word
+## picture ++
+## minute
+## walk
+## look ** (wrong)
 
-sentence <- "The guy in front of me just bought a pound of bacon, a bouquet, and a case of"
-next_word <- scrub_and_predict(sentence)
-next_word
-## correct = beer
+## Question 6
+sentence <- "I'd just like all of these questions answered, a presentation of evidence, and a jury to settle the"
+next_word <- scrub_and_predict(sentence, num_pred_words = 10000)
+next_word[predictor %in% c("account", "case", "matter", "incident")]
+## account
+## case ** (wrong)
+## matter ++
+## incident
 
-sentence <- "You're the reason why I smile everyday. Can you follow me please? It would mean the"
-next_word <- scrub_and_predict(sentence)
-next_word
-## correct = world
+## Question 7
+sentence <- "I can't deal with unsymetrical things. I can't even hold an uneven number of bags of groceries in each"
+next_word <- scrub_and_predict(sentence, num_pred_words = 10000)
+next_word[predictor %in% c("finger", "hand", "arm", "toe")]
+## finger
+## hand **
+## arm
+## toe
 
-sentence <- "Hey sunshine, can you follow me and make me the"
-next_word <- scrub_and_predict(sentence, ngram_all, 5)
-next_word
-## correct = happiest
+## Question 8
+sentence <- "Every inch of you is perfect from the bottom to the"
+next_word <- scrub_and_predict(sentence, num_pred_words = 10000)
+next_word[predictor %in% c("middle", "side", "center", "top")]
+## middle
+## side
+## center
+## top **
 
-sentence <- "Very early observations on the Bills game: Offense still struggling but the"
-next_word <- scrub_and_predict(sentence, ngram_all, 5)
-next_word
-## correct = defense 
-## mine = crowd
+## Question 9
+sentence <- "I'm thankful my childhood was filled with imagination and bruises from playing"
+next_word <- scrub_and_predict(sentence, num_pred_words = 10000)
+next_word[predictor %in% c("outside", "inside", "daily", "weekly")]
+## outside **
+## inside
+## daily
+## weekly
 
-sentence <- "Go on a romantic date at the"
-next_word <- scrub_and_predict(sentence, ngram_all, num_pred_words = 15)
-next_word
-## correct = beach
-## mine = grocery
+## Question 10
+sentence <- "I like how the same people are in almost all of Adam Sandler's"
+next_word <- scrub_and_predict(sentence, num_pred_words = 10000)
+next_word[predictor %in% c("movies", "stories", "novels", "pictures")]
+## TOP result is films.  None for these but movies is a good substitute
+## movies **
+## stories
+## novels
+## pictures
 
-sentence <- "Well I'm pretty sure my granny has some old bagpipes in her garage I'll dust them off and be on my"
-next_word <- scrub_and_predict(sentence, ngram_all, 5)
-next_word
-## correct = way
+## Benchmark 1
+## Overall top-3 score: 16.78 %
+## Overall top-1 precision: 12.90 %
+## Overall top-3 precision: 20.18 %
+## Average runtime: 9.55 msec
+## Number of predictions: 28464
+## Total memory used: 1327.58 MB
 
-sentence <- "Ohhhhh #PointBreak is on tomorrow. Love that film and haven't seen it in quite some"
-scrub_and_predict(sentence, ngram_all)[1:3]$predictor
+## Dataset details
+## Dataset "blogs" (599 lines, 14587 words, hash 14b3c593e543eb8b2932cf00b646ed653e336897a03c82098b725e6e1f9b7aa2)
+## Score: 16.12 %, Top-1 precision: 11.97 %, Top-3 precision: 19.87 %
+## Dataset "tweets" (793 lines, 14071 words, hash 7fa3bf921c393fe7009bc60971b2bb8396414e7602bb4f409bed78c7192c30f4)
+## Score: 17.44 %, Top-1 precision: 13.82 %, Top-3 precision: 20.49 %
 
-## correct = time
+## - second benchmark after fixing duplicates, mass of unigrams, apostraphes
+##Overall top-3 score:     18.35 %
+##Overall top-1 precision: 13.78 %
+##Overall top-3 precision: 22.28 %
+##Average runtime:         12.97 msec
+##Number of predictions:   28464
+##Total memory used:       1229.52 MB
 
-sentence <- "After the ice bucket challenge Louis will push his long wet hair out of his eyes with his little"
-next_word <- scrub_and_predict(sentence, ngram_all, num_pred_words = 10)
-next_word
-## correct = fingers
+##Dataset details
+##Dataset "blogs" (599 lines, 14587 words, hash 14b3c593e543eb8b2932cf00b646ed653e336897a03c82098b725e6e1f9b7aa2)
+##Score: 18.05 %, Top-1 precision: 13.33 %, Top-3 precision: 22.09 %
+##Dataset "tweets" (793 lines, 14071 words, hash 7fa3bf921c393fe7009bc60971b2bb8396414e7602bb4f409bed78c7192c30f4)
+##Score: 18.65 %, Top-1 precision: 14.23 %, Top-3 precision: 22.46 %
 
-sentence <- "Be grateful for the good times and keep the faith during the"
-next_word <- scrub_and_predict(sentence, ngram_all, num_pred_words = 20)
-next_word
-## correct = bad
-## mine = hard
-
-sentence <- "If this isn't the cutest thing you've ever seen, then you must be"
-next_word <- scrub_and_predict(sentence, ngram_all, num_pred_words = 100)
-## correct = insane
-
-
-
-for (i in 1:nrow(qunitgram_dt)){
-  set(qunitgram_dt, i, 5L, 
-      ngram_dt[i,2] / 
-        ngram_dt[ngram %like% paste("^", ngram_dt[i,3], " ", sep = ""), sum(n)])
-}
-
-
-if (candidateIs5gram) {
-  score = matched5gramCount / input4gramCount
-} else if (candidateIs4gram) {
-  score = 0.4 * matched4gramCount / input3gramCount
-} else if (candidateIs3gram) {
-  score = 0.4 * 0.4 * matched3gramCount / input2gramCount
-} else if (candidateIs2gram) {
-  score = 0.4 * 0.4 * 0.4 * matched2gramcount / input1gramCount
-}
 
