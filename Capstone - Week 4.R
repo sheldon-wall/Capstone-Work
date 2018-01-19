@@ -163,32 +163,33 @@ rm(sample.all)
 split_ngram <- function (tidy_corpus, nodes, drop = 3)
 {
   
-  ngram_df <- tidy_corpus %>%
+  ngram_n <- tidy_corpus %>%
     unnest_tokens(ngram, text, token = "ngrams", n = nodes) %>%
     count(ngram, sort = TRUE)
   
-  cat( nodes, "-gram rows before =", nrow(ngram_df), "\n")
-  ngram_df <- ngram_df %>% 
+  cat( nodes, "-gram rows before =", nrow(ngram_n), "\n")
+  ngram_n <- ngram_n %>% 
     mutate(base = "", predictor = "") %>%
     filter(n > drop)
-  cat("After dropping rows with freq <=", drop, " = ", nrow(ngram_df), "\n")
+  cat("After dropping rows with freq <=", drop, " = ", nrow(ngram_n), "\n")
   
-  ngram_dt <- as.data.table(ngram_df)
+  ngram_n <- as.data.table(ngram_n)
+  ##rm(ngram_df)
   
   if (nodes > 0){
     ## split last word out as the predictor
-    ngram_dt[, predictor := word(ngram, start = -1)]
-    ngram_dt[, base := word(ngram, end = nodes - 1)]
+    ngram_n[, predictor := word(ngram, start = -1)]
+    ngram_n[, base := word(ngram, end = nodes - 1)]
   }
   else
   {
-    ngram_dt$base <- ngram_dt$ngram
+    ngram_n$base <- ngram_n$ngram
   }
   
-  ngram_dt <- ngram_dt[,"ngram":=NULL]
-  setcolorder(ngram_dt, c("base", "predictor", "n"))
+  ngram_n <- ngram_n[,"ngram":=NULL]
+  setcolorder(ngram_n, c("base", "predictor", "n"))
   
-  return(ngram_dt)
+  return(ngram_n)
 }
 
 ## Convert to a tidy corpus and accumulate n-grams
@@ -213,7 +214,7 @@ ngram_5 <- split_ngram(tidy_corpus, 5, 1)
 ngram_all <- rbind(ngram_1, ngram_2, ngram_3, ngram_4, ngram_5) 
 setkey(ngram_all, base)
 
-filename <- file.path(dataDir, "ngram_all.Rds")
+filename <- file.path(dataDir, "ngram_small.Rds")
 saveRDS(ngram_all, filename)
 
 filename <- file.path(dataDir, "tidy_corpus.Rds")
@@ -235,7 +236,7 @@ scrub_and_predict <- function(sentence, num_nodes = 5, num_pred_words = 5)
   ## set number of nodes to lessor of max n-grams or number of words in sentence
   num_nodes <- min(num_nodes, str_count(sentence, "\\S+"))
   
-  ans <- predict_next_word(sentence, ngram_all, num_nodes)
+  ans <- predict_next_word(sentence, num_nodes)
   
   setkey(ans, predictor)
   ans <- subset(ans, !duplicated(predictor))
@@ -248,7 +249,7 @@ scrub_and_predict <- function(sentence, num_nodes = 5, num_pred_words = 5)
 ## sentence contains sentence that needs to be matched within ngram_all 
 ## nodes contains N-Gram that we are introspecting, 
 
-predict_next_word <- function(sentence, ngram_all, node)
+predict_next_word <- function(sentence, node)
 {
   ## set search word 
   search_words <- word(sentence, start = -node, end = -1)
@@ -263,7 +264,7 @@ predict_next_word <- function(sentence, ngram_all, node)
   if (nrow(ans) > 0){
     ans[,prob:= n/sum(n)]
     if (node > 0){
-      backoff <- predict_next_word(search_words, ngram_all, node - 1)
+      backoff <- predict_next_word(search_words, node - 1)
       ## stupid backoff
       backoff[,prob:=prob*.4]
       ans <- rbind(ans, backoff)
@@ -271,7 +272,7 @@ predict_next_word <- function(sentence, ngram_all, node)
   } else {
     if (node > 0){
       ## stupid backoff
-      ans <- predict_next_word(search_words, ngram_all, node - 1)
+      ans <- predict_next_word(search_words, node - 1)
       ans[,prob:=prob*.4]
     }
   }
@@ -281,7 +282,7 @@ predict_next_word <- function(sentence, ngram_all, node)
 
 dataDir <- "./data/NLP Datasets" 
 
-filename <- file.path(dataDir, "ngram_all.Rds")
+filename <- file.path(dataDir, "ngram_small.Rds")
 ngram_all <- readRDS(filename)
 
 ## sentences from Quiz #2
@@ -294,8 +295,6 @@ next_word[predictor %in% c("give", "sleep", "eat", "die")]
 ## sleep
 ## eat
 ## die ++
-
-nrow(unique(next_word, by=key(next_word$predictor)))
 
 ## Question 2
 sentence <- "Guy at my table's wife got up to go to the bathroom and I asked about dessert and he started telling me about his"
@@ -395,6 +394,7 @@ next_word[predictor %in% c("movies", "stories", "novels", "pictures")]
 ## Score: 17.44 %, Top-1 precision: 13.82 %, Top-3 precision: 20.49 %
 
 ## - second benchmark after fixing duplicates, mass of unigrams, apostraphes
+
 ##Overall top-3 score:     18.35 %
 ##Overall top-1 precision: 13.78 %
 ##Overall top-3 precision: 22.28 %
@@ -409,3 +409,31 @@ next_word[predictor %in% c("movies", "stories", "novels", "pictures")]
 ##Score: 18.65 %, Top-1 precision: 14.23 %, Top-3 precision: 22.46 %
 
 
+## benchmark after removing n > 1 (mainly bigrams)
+
+##Overall top-3 score:     18.38 %
+##Overall top-1 precision: 13.80 %
+##Overall top-3 precision: 22.31 %
+##Average runtime:         9.77 msec
+##Number of predictions:   28464
+##Total memory used:       1018.00 MB
+
+##Dataset details
+##Dataset "blogs" (599 lines, 14587 words, hash 14b3c593e543eb8b2932cf00b646ed653e336897a03c82098b725e6e1f9b7aa2)
+##Score: 18.12 %, Top-1 precision: 13.40 %, Top-3 precision: 22.16 %
+##Dataset "tweets" (793 lines, 14071 words, hash 7fa3bf921c393fe7009bc60971b2bb8396414e7602bb4f409bed78c7192c30f4)
+##Score: 18.65 %, Top-1 precision: 14.20 %, Top-3 precision: 22.46 %
+
+## benchmark after removing n > 2 (all n-grams)
+##Overall top-3 score:     18.29 %
+##Overall top-1 precision: 13.78 %
+##Overall top-3 precision: 22.18 %
+##Average runtime:         8.03 msec
+##Number of predictions:   28464
+##Total memory used:       763.08 MB
+
+##Dataset details
+##Dataset "blogs" (599 lines, 14587 words, hash 14b3c593e543eb8b2932cf00b646ed653e336897a03c82098b725e6e1f9b7aa2)
+##Score: 18.03 %, Top-1 precision: 13.40 %, Top-3 precision: 22.03 %
+##Dataset "tweets" (793 lines, 14071 words, hash 7fa3bf921c393fe7009bc60971b2bb8396414e7602bb4f409bed78c7192c30f4)
+##Score: 18.55 %, Top-1 precision: 14.16 %, Top-3 precision: 22.32 %
